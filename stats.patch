@@ -1,0 +1,213 @@
+Index: include/options.h
+===================================================================
+--- include/options.h	(révision 461)
++++ include/options.h	(copie de travail)
+@@ -42,6 +42,7 @@
+ //#define LOG_MODULATION
+ //#define LOG_ENVIRONMENT
+ #define LOG_WORLDSENS
++#define LOG_STATISTICS
+ 
+ 
+ #endif //__options__
+Index: include/modelutils.h
+===================================================================
+--- include/modelutils.h	(révision 461)
++++ include/modelutils.h	(copie de travail)
+@@ -21,6 +21,7 @@
+ #include <include/spadas.h>
+ #include <include/hadas.h>
+ #include <include/timer.h>
++#include <include/stats.h>
+ #include <include/types.h>
+ #include <include/models.h>
+ #include <include/rng.h>
+Index: include/log.h
+===================================================================
+--- include/log.h	(révision 461)
++++ include/log.h	(copie de travail)
+@@ -8,6 +8,7 @@
+ #define __log__
+ 
+ #include <include/options.h>
++#include <include/stats.h>
+ 
+ 
+ #ifdef LOG_REPLAY
+@@ -96,4 +97,18 @@
+ #endif //LOG_WORLDSENS
+ /* end of edition */
+ 
++/* stats_output_file is defined in include/stats.h */
++#ifdef LOG_STATISTICS
++#define PRINT_STATISTICS(x...) \
++do { \
++    if (stats_output_file == NULL) { \
++        fprintf(stderr, x); \
++    } else { \
++        fprintf(stats_output_file, x); \
++    } \
++} while (0)
++#else //LOG_STATISTICS
++#define PRINT_STATISTICS(x...) do { } while (0)
++#endif //LOG_STATISTICS
++
+ #endif //__log__
+Index: include/Makefile.am
+===================================================================
+--- include/Makefile.am	(révision 461)
++++ include/Makefile.am	(copie de travail)
+@@ -1,4 +1,4 @@
+ include_HEADERS = das.h mem_fs.h models.h sodas.h spadas.h hadas.h timer.h types.h      \
+ 	          modelutils.h modulation.h worldsens_pkt.h options.h log.h radio.h rng.h    \
+                   antenna.h battery.h medium.h entity.h packet.h probabilistic_distribution.h node.h param.h \
+-	          measure.h scheduler.h monitor.h dbg.h ioctl_message.h
++	          measure.h scheduler.h monitor.h dbg.h ioctl_message.h stats.h
+Index: models/application/Makefile.am
+===================================================================
+--- models/application/Makefile.am	(révision 461)
++++ models/application/Makefile.am	(copie de travail)
+@@ -1,6 +1,6 @@
+ SUBDIRS = data_d
+ 
+-lib_LTLIBRARIES = libapplication_cbr.la libapplication_hello.la libapplication_cbr_v2.la libapplication_bmac_app_sample.la libapplication_dynamic.la
++lib_LTLIBRARIES = libapplication_cbr.la libapplication_hello.la libapplication_cbr_v2.la libapplication_bmac_app_sample.la libapplication_dynamic.la libapplication_stats_app_sample.la
+ 
+ libapplication_cbr_la_CFLAGS = $(GLIB_FLAGS) $(CFLAGS) $(GSL_FLAGS) -I$(top_srcdir)
+ 
+@@ -31,3 +31,9 @@
+ libapplication_dynamic_la_SOURCES = dynamic.c
+ 
+ libapplication_dynamic_la_LDFLAGS = -module
++
++libapplication_stats_app_sample_la_CFLAGS = $(GLIB_FLAGS) $(CFLAGS) $(GSL_FLAGS) -I$(top_srcdir)
++
++libapplication_stats_app_sample_la_SOURCES = stats_app_sample.c
++
++libapplication_stats_app_sample_la_LDFLAGS = -module
+Index: models/environment/Makefile.am
+===================================================================
+--- models/environment/Makefile.am	(révision 461)
++++ models/environment/Makefile.am	(copie de travail)
+@@ -1,4 +1,4 @@
+-lib_LTLIBRARIES = libenvironment_fire.la libenvironment_collection_ctrl.la
++lib_LTLIBRARIES = libenvironment_fire.la libenvironment_collection_ctrl.la libenvironment_stats_handler_sample.la
+ 
+ libenvironment_fire_la_CFLAGS = $(GLIB_FLAGS) $(CFLAGS) $(GSL_FLAGS) -I$(top_srcdir)
+ 
+@@ -11,3 +11,9 @@
+ libenvironment_collection_ctrl_la_SOURCES = collection_ctrl.c
+ 
+ libenvironment_collection_ctrl_la_LDFLAGS = -module
++
++libenvironment_stats_handler_sample_la_CFLAGS = $(GLIB_FLAGS) $(CFLAGS) $(GSL_FLAGS) -I$(top_srcdir)
++
++libenvironment_stats_handler_sample_la_SOURCES = stats_handler_sample.c
++
++libenvironment_stats_handler_sample_la_LDFLAGS = -module
+Index: configure.ac
+===================================================================
+--- configure.ac	(révision 461)
++++ configure.ac	(copie de travail)
+@@ -132,6 +132,7 @@
+ libraries/sodas/heap/Makefile
+ libraries/sodas/Makefile
+ libraries/timer/Makefile
++libraries/stats/Makefile
+ libraries/hadas/hash/Makefile
+ libraries/hadas/Makefile
+ libraries/spadas/dbtree/Makefile
+Index: src/config.c
+===================================================================
+--- src/config.c	(révision 461)
++++ src/config.c	(copie de travail)
+@@ -98,7 +98,7 @@
+         return -1;
+     }
+     
+-    /* retrieve @nodes / @duration / @x / @y / @z */
++    /* retrieve @nodes / @duration / @statistics / @x / @y / @z */
+     for (attr = nodeset->nodeTab[0]->properties ; attr ; attr = attr->next) {
+         if (! strcmp((char *) attr->name, XML_A_NODES)) {
+             /* xsd: 1 <= @nodes <= 65535 */
+@@ -107,6 +107,9 @@
+             /* xsd: 0 <= @duration */
+             get_param_time((char *) attr->children->content, &duration);
+             scheduler_set_end(duration);
++        } else if (! strcmp((char *) attr->name, XML_A_STATS)) {
++            /* xsd: string */
++            stats_set_output((char *) attr->children->content);
+         } else if (! strcmp((char *) attr->name, XML_A_X)) {
+             /* xsd: 0 <= @x */
+             get_topology_area()->x = strtod((char *) attr->children->content, NULL);
+Index: src/config.xsd
+===================================================================
+--- src/config.xsd	(révision 461)
++++ src/config.xsd	(copie de travail)
+@@ -99,6 +99,7 @@
+     <xsd:complexType>
+       <xsd:attribute name="nodes"       type="nodeType" use="required"/>
+       <xsd:attribute name="duration"    type="xsd:string" use="optional" default="0"/>
++      <xsd:attribute name="statistics"  type="xsd:string" use="optional" default=""/>
+       <xsd:attribute name="x"           type="xsd:unsignedLong" use="required"/>
+       <xsd:attribute name="y"           type="xsd:unsignedLong" use="required"/>
+       <xsd:attribute name="z"           type="xsd:unsignedLong" use="required"/>
+Index: src/xmlparser.h
+===================================================================
+--- src/xmlparser.h	(révision 461)
++++ src/xmlparser.h	(copie de travail)
+@@ -66,6 +66,7 @@
+ #define XML_A_X           "x"
+ #define XML_A_Y           "y"
+ #define XML_A_Z           "z"
++#define XML_A_STATS       "statistics"
+ #define XML_A_NAME        "name"
+ #define XML_A_LIBRARY     "library"
+ #define XML_A_ENTITY      "entity"
+Index: src/main.c
+===================================================================
+--- src/main.c	(révision 461)
++++ src/main.c	(copie de travail)
+@@ -29,6 +28,7 @@
+     }
+     do_observe();                /* observe         */
+     do_end();                    /* end             */
++    do_stats();                  /* statistics      */
+     goto end;
+ 
+  end:
+@@ -97,6 +97,7 @@
+ 	hadas_init()           ||  /* hadas      */
+ 	rng_init()             ||  /* rng        */
+ 	timer_init()           ||  /* timer      */
++	stats_init()           ||  /* statistics */
+ 	bundle_init()          ||  /* bundle     */
+ 	entity_init()          ||  /* entity     */
+ 	monitor_init()         ||  /* monitor    */
+@@ -138,6 +139,7 @@
+ /* ************************************************** */
+ /* ************************************************** */
+ void do_clean(void) {
++    stats_clean();                 /* statistics */
+     rng_clean();                   /* rng        */
+     scheduler_clean();             /* scheduler  */
+     packet_clean();                /* packet     */
+Index: src/Makefile.am
+===================================================================
+--- src/Makefile.am	(révision 461)
++++ src/Makefile.am	(copie de travail)
+@@ -11,6 +11,7 @@
+ 	     ../libraries/hadas/$(HADAS)/libhadas.a             \
+ 	     ../libraries/spadas/$(SPADAS)/libspadas.a          \
+ 	     ../libraries/timer/libtimer.a			\
++	     ../libraries/stats/libstats.a			\
+ 	      ./scheduler/$(SCHEDULER)/libscheduler.a           \
+ 	     ../libraries/worldsens/libwsens_srv.a              \
+ 	      $(XML_LIBS) $(GLIB_LIBS) 
+Index: libraries/Makefile.am
+===================================================================
+--- libraries/Makefile.am	(révision 461)
++++ libraries/Makefile.am	(copie de travail)
+@@ -1 +1 @@
+-SUBDIRS = mem_fs das sodas spadas hadas timer worldsens
++SUBDIRS = mem_fs das sodas spadas hadas stats timer worldsens
